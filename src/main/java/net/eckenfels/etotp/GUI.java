@@ -1,5 +1,11 @@
 /*
  * GUI.java - et-otp: GPL Java TOTP soft token by Bernd Eckenfels.
+ *
+ * Changes:
+ * 2016-05-20 Support multiple settings. by suzuki.kei
+ * 2016-05-20 Add CLI mode. by suzuki.kei
+ * 2016-05-20 Place config file in home directory. by suzuki.kei
+ *
  */
 package net.eckenfels.etotp;
 
@@ -26,6 +32,9 @@ import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.spec.InvalidKeySpecException;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.List;
 import java.util.Properties;
 
 import javax.crypto.BadPaddingException;
@@ -37,6 +46,7 @@ import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -60,23 +70,26 @@ public class GUI implements ActionListener
     private static final String HELPURL = "http://ecki.github.io/et-otp/";
     private static final String PROGNAME = "et-OTP";
 
+    JComboBox<String> settingsNameComboBox;
     JPasswordField passwordField;
     private JTextField textField;
     private JLabel textLabel;
     private JFrame frame;
     private JDialog settingsDialog;
     private JDialog aboutDialog;
+    private JTextField settingsName;
     private JTextField settingsCode;
     private JPasswordField settingsPass;
-    private File configFile = new File(".et-otp.properties");
+    private static File configFile = new File(System.getProperty("user.home"), ".et-otp.properties");
     private JLabel settingsFileLabel;
     private JLabel statusLabel;
+    private boolean logEnabled = true;
 
 
     private GUI() { }
 
 
-    static void buildMainFrame()
+    static void buildMainFrame() throws IOException
     {
         GridBagLayout layout = new GridBagLayout();
         GUI gui= new GUI();
@@ -118,12 +131,38 @@ public class GUI implements ActionListener
         c.weightx = 1;
         c.anchor = GridBagConstraints.CENTER;
         c.insets = new Insets(0,10,5,10);
-        label = new JLabel("Unlock Password:");
+        label = new JLabel("Setting Name:");
         gui.frame.add(label, c);
 
         c.fill = GridBagConstraints.HORIZONTAL;
         c.gridx = 1;
         c.gridy = 3;
+        c.gridheight = 1;
+        c.gridwidth = 2;
+        c.weighty = 0;
+        c.weightx = 1;
+        c.insets = new Insets(0,10,10,10);
+        JComboBox<String> settingsNameComboBox = new JComboBox<String>();
+        settingsNameComboBox.addActionListener(gui);
+        settingsNameComboBox.setFocusable(true);
+        gui.frame.add(settingsNameComboBox, c);
+        gui.settingsNameComboBox = settingsNameComboBox;
+
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.gridx = 1;
+        c.gridy = 4;
+        c.gridheight = 1;
+        c.gridwidth = 2;
+        c.weighty = 0;
+        c.weightx = 1;
+        c.anchor = GridBagConstraints.CENTER;
+        c.insets = new Insets(0,10,5,10);
+        label = new JLabel("Unlock Password:");
+        gui.frame.add(label, c);
+
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.gridx = 1;
+        c.gridy = 5;
         c.gridheight = 1;
         c.gridwidth = 2;
         c.weighty = 0;
@@ -137,7 +176,7 @@ public class GUI implements ActionListener
 
         c.fill = GridBagConstraints.BOTH;
         c.gridx = 3;
-        c.gridy = 2;
+        c.gridy = 4;
         c.gridheight = 2;
         c.gridwidth = 1;
         c.weighty = 0;
@@ -151,7 +190,7 @@ public class GUI implements ActionListener
 
         c.fill = GridBagConstraints.HORIZONTAL;
         c.gridx = 2;
-        c.gridy = 4;
+        c.gridy = 6;
         c.gridheight = 1;
         c.gridwidth = 1;
         c.weightx = 1;
@@ -168,7 +207,7 @@ public class GUI implements ActionListener
 
         c.fill = GridBagConstraints.HORIZONTAL;
         c.gridx = 1;
-        c.gridy = 4;
+        c.gridy = 6;
         c.gridheight = 1;
         c.gridwidth = 1;
         c.weightx = 2;
@@ -180,7 +219,7 @@ public class GUI implements ActionListener
 
         c.fill = GridBagConstraints.HORIZONTAL;
         c.gridx = 1;
-        c.gridy = 5;
+        c.gridy = 7;
         c.gridheight = 1;
         c.gridwidth = 1;
         c.weightx = 2;
@@ -192,7 +231,7 @@ public class GUI implements ActionListener
 
         c.fill = GridBagConstraints.HORIZONTAL;
         c.gridx = 2;
-        c.gridy = 5;
+        c.gridy = 7;
         c.gridheight = 1;
         c.gridwidth = 1;
         c.weightx = 1;
@@ -205,7 +244,7 @@ public class GUI implements ActionListener
 
         c.fill = GridBagConstraints.HORIZONTAL;
         c.gridx = 1;
-        c.gridy = 6;
+        c.gridy = 8;
         c.gridheight = 1;
         c.gridwidth = 3;
         c.weightx = 1;
@@ -223,13 +262,15 @@ public class GUI implements ActionListener
 
         // now we can display it
         gui.frame.setVisible(true);
+
+        gui.reloadSettingsNames();
     }
 
 
     @Override
     public void actionPerformed(ActionEvent e)
     {
-        System.out.println("Event: " + e.getActionCommand() + " " + e.getSource() + " " + e.getID());
+        log("Event: " + e.getActionCommand() + " " + e.getSource() + " " + e.getID());
 
         statusLabel.setText(" ");
         statusLabel.setForeground(Color.BLACK);
@@ -249,12 +290,14 @@ public class GUI implements ActionListener
         {
             settingsDialog.setVisible(false);
 
+            String name = settingsName.getText();
             String code = settingsCode.getText();
             char[] pass = settingsPass.getPassword();
 
             try
             {
-                writeSecret(code, pass);
+                writeSecret(name, code, pass);
+                reloadSettingsNames(name);
             }
             catch (Exception ex)
             {
@@ -310,9 +353,10 @@ public class GUI implements ActionListener
                 buildSettingsDialog(d);
                 settingsDialog = d;
             }
+            settingsName.setText((String) settingsNameComboBox.getSelectedItem());
             settingsCode.setText("");
             settingsPass.setText("");
-            settingsFileLabel.setText("Config File " + (configFile.isFile()?"(overwrite)":"(missing)"));
+            settingsFileLabel.setText("Config File " + (configFile.isFile()?"(exists)":"(missing)"));
             settingsDialog.setVisible(true);
         }
         else if ("Calc".equals(e.getActionCommand()) || (e.getSource() == passwordField))
@@ -320,22 +364,14 @@ public class GUI implements ActionListener
             try
             {
                 char[] pass = passwordField.getPassword();
+                String settingsName = (String) settingsNameComboBox.getSelectedItem();
 
-                byte[] bytes = readSecret(pass);
-
-                long seconds = System.currentTimeMillis() / 1000;
-                long t0 = 0l;
-                long step = 30l;
-                long counter = (seconds - t0) / step;
-
-                String s = RFC4226.generateOTP(bytes, counter, 6, false, -1);
-                textField.setText(s);
+                textField.setText(generateCurrentToken(settingsName, pass));
                 textField.requestFocus();
                 textField.setCaretPosition(0);
                 textField.moveCaretPosition(6);
 
-                s = RFC4226.generateOTP(bytes, counter+1, 6, false, -1);
-                textLabel.setText(s);
+                textLabel.setText(generateNextToken(settingsName, pass));
                 statusLabel.setText("");
             }
             catch (BadPaddingException bp)
@@ -369,6 +405,27 @@ public class GUI implements ActionListener
         }
     }
 
+    private String generateCurrentToken(String settingsName, char[] pass)  throws Exception{
+        byte[] bytes = readSecret(settingsName, pass);
+
+        long seconds = System.currentTimeMillis() / 1000;
+        long t0 = 0l;
+        long step = 30l;
+        long counter = (seconds - t0) / step;
+
+        return RFC4226.generateOTP(bytes, counter, 6, false, -1);
+    }
+
+    private String generateNextToken(String settingsName, char[] pass) throws Exception {
+        byte[] bytes = readSecret(settingsName, pass);
+
+        long seconds = System.currentTimeMillis() / 1000;
+        long t0 = 0l;
+        long step = 30l;
+        long counter = (seconds - t0) / step;
+
+        return RFC4226.generateOTP(bytes, counter+1, 6, false, -1);
+    }
 
     private void errorText(String text)
     {
@@ -377,12 +434,19 @@ public class GUI implements ActionListener
     }
 
 
-    private void writeSecret(String code, char[] pass)
+    private void writeSecret(String name, String code, char[] pass)
             throws DecodingException, NoSuchAlgorithmException,
             InvalidKeySpecException, NoSuchPaddingException,
             InvalidKeyException, IllegalBlockSizeException,
             BadPaddingException, FileNotFoundException, IOException
     {
+        if (name == null || name.isEmpty()) {
+            throw new RuntimeException("name is required.");
+        }
+        if (code == null || code.isEmpty()) {
+            throw new RuntimeException("code is required.");
+        }
+
         byte[] codeBytes;
         codeBytes = Base32.decode(code);
         SecretKeyFactory f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1");
@@ -398,19 +462,65 @@ public class GUI implements ActionListener
 
         byte[] enc = c.doFinal(codeBytes);
 
-        System.out.println("WRITE salt=" + Base32.encode(salt) + " encrypted=" + Base32.encode(enc));
+        log("WRITE salt=" + Base32.encode(salt) + " encrypted=" + Base32.encode(enc));
 
-        Properties p = new Properties();
-        p.put("key.1.name" , "test");
-        p.put("key.1.salt", Base32.encode(salt));
-        p.put("key.1.encoded", Base32.encode(enc));
+        Properties p = readSettings();
+        p.put("key." + name + ".name" , "test");
+        p.put("key." + name + ".salt", Base32.encode(salt));
+        p.put("key." + name + ".encoded", Base32.encode(enc));
         OutputStream os = new FileOutputStream(configFile);
         p.store(os , PROGNAME + " " + VERSION + " softtokens");
         os.close();
     }
 
+    private void reloadSettingsNames() throws IOException {
+        String selectedName = (String) settingsNameComboBox.getSelectedItem();
+        reloadSettingsNames(selectedName);
+    }
 
-    private byte[] readSecret(char[] pass)
+    private void reloadSettingsNames(String selectedName) throws IOException {
+        settingsNameComboBox.removeAllItems();
+        List<String> settingsNames = readSettingsNames();
+        for(String name : settingsNames) {
+            settingsNameComboBox.addItem(name);
+        }
+        if (settingsNames.contains(selectedName)) {
+            settingsNameComboBox.setSelectedItem(selectedName);
+        }
+    }
+
+    private List<String> readSettingsNames() throws IOException {
+        Properties properties = readSettings();
+        List<String> names = new ArrayList<String>();
+        for(Enumeration<Object> enumeration = properties.keys(); enumeration.hasMoreElements();) {
+            String key = (String) enumeration.nextElement();
+            if (key.matches("key.[^.]+\\.name")) {
+                String name = key.split("\\.", 3)[1];
+                names.add(name);
+            }
+        }
+        return names;
+    }
+
+    private Properties readSettings() throws IOException {
+        Properties properties = new Properties();
+        if (!configFile.isFile()) {
+            return properties;
+        }
+
+        InputStream stream = null;
+        try {
+            stream = new FileInputStream(configFile);
+            properties.load(stream);
+            return properties;
+        } finally {
+            if(stream != null) {
+                stream.close();
+            }
+        }
+    }
+
+    private byte[] readSecret(String settingsName, char[] pass)
             throws FileNotFoundException, IOException, DecodingException,
             InvalidKeySpecException, NoSuchAlgorithmException,
             NoSuchPaddingException, InvalidKeyException,
@@ -427,16 +537,16 @@ public class GUI implements ActionListener
         p = new Properties();
         p.load(is); is.close();
 
-        salt = Base32.decode((String)p.get("key.1.salt"));
-        enc = Base32.decode((String)p.get("key.1.encoded"));
+        salt = Base32.decode((String)p.get("key." + settingsName + ".salt"));
+        enc = Base32.decode((String)p.get("key." + settingsName + ".encoded"));
 
-        System.out.println("READ salt=" + Base32.encode(salt) + " encrypted=" + Base32.encode(enc));
+        log("READ salt=" + Base32.encode(salt) + " encrypted=" + Base32.encode(enc));
 
         password = f.generateSecret(new PBEKeySpec(pass, salt, 1000, 128));
         // TODO: overwrite pass
         password = new SecretKeySpec(password.getEncoded(), "AES");
 
-        System.out.println(" password=" + Base32.encode(password.getEncoded()));
+        log(" password=" + Base32.encode(password.getEncoded()));
 
         c = Cipher.getInstance("AES");
         c.init(Cipher.DECRYPT_MODE, password);
@@ -458,28 +568,39 @@ public class GUI implements ActionListener
         c.weightx = 0;
         c.weighty = 0;
         c.insets = new Insets(10, 10, 10, 10);
-        dia.add(new JLabel("Code (base32):", JLabel.RIGHT), c);
+        dia.add(new JLabel("Name", JLabel.RIGHT), c);
 
         c.gridx = 2;
         c.gridy = 1;
         c.weightx = 1;
         c.weighty = 0;
-        settingsCode = new JTextField();
-        dia.add(settingsCode, c);
+        settingsName = new JTextField();
+        dia.add(settingsName, c);
 
         c.gridx = 1;
         c.gridy = 2;
         c.weightx = 0;
-        dia.add(new JLabel("Password:", JLabel.RIGHT), c);
+        dia.add(new JLabel("Code (base32):", JLabel.RIGHT), c);
 
         c.gridx = 2;
         c.gridy = 2;
+        c.weightx = 1;
+        settingsCode = new JPasswordField();
+        dia.add(settingsCode, c);
+
+        c.gridx = 1;
+        c.gridy = 3;
+        c.weightx = 0;
+        dia.add(new JLabel("Password:", JLabel.RIGHT), c);
+
+        c.gridx = 2;
+        c.gridy = 3;
         c.weightx = 1;
         settingsPass = new JPasswordField();
         dia.add(settingsPass, c);
 
         c.gridx = 1;
-        c.gridy = 3;
+        c.gridy = 4;
         c.gridwidth = 2;
         c.weightx = 1;
         c.weighty = 1;
@@ -489,16 +610,16 @@ public class GUI implements ActionListener
 
         String file = configFile.getAbsolutePath();
         c.gridx = 1;
-        c.gridy = 4;
+        c.gridy = 5;
         c.weightx = 1;
         c.weighty = 0;
         c.gridwidth = 2;
         c.insets = new Insets(10,10,0,10);
-        settingsFileLabel = new JLabel("Config File " + (configFile.isFile()?"(overwrite)":"(missing)"));
+        settingsFileLabel = new JLabel("Config File " + (configFile.isFile()?"(exists)":"(missing)"));
         dia.add(settingsFileLabel, c);
 
         c.gridx = 1;
-        c.gridy = 5;
+        c.gridy = 6;
         c.weightx = 1;
         c.gridwidth = 2;
         c.insets = new Insets(0,10,10,10);
@@ -506,16 +627,33 @@ public class GUI implements ActionListener
         dia.add(label, c);
     }
 
+    private void log(String message) {
+        if (logEnabled) {
+            System.out.println(message);
+        }
+    }
+
 
     /**
      * Main method - does not honor any arguments (yet).
      * @param args ignored
      */
-    public static void main(String[] args)
+    public static void main(String[] args) throws Exception
     {
-        buildMainFrame();
+        if (args.length > 0) {
+            new GUI().runAsCli(args[0]);
+        } else {
+            buildMainFrame();
+        }
     }
 
+    private void runAsCli(String settingsName) throws Exception {
+        this.logEnabled = false;
+        char[] pass = new char[0];
+        String currentToken = generateCurrentToken(settingsName, pass);
+        String nextToken = generateNextToken(settingsName, pass);
+        System.out.println(String.format("%s (next %s)", currentToken, nextToken));
+    }
 
     class ShowEvent extends ComponentAdapter
     {
